@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -19,7 +20,7 @@ func isRegularFile(info fs.FileInfo) bool {
 	return info.Mode()&os.ModeType == 0
 }
 
-func getFiles(path string) ([]fileInfo, error) {
+func getFiles(out io.Writer, path string) ([]fileInfo, error) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return nil, err
@@ -28,13 +29,13 @@ func getFiles(path string) ([]fileInfo, error) {
 	for _, entry := range entries {
 		info, err := entry.Info()
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "ERROR:", err)
+			fmt.Fprintln(out, "ERROR:", err)
 			continue
 		}
 		if info.IsDir() {
-			files, err := getFiles(filepath.Join(path, info.Name()))
+			files, err := getFiles(out, filepath.Join(path, info.Name()))
 			if err != nil {
-				fmt.Fprintln(os.Stderr, "ERROR:", err)
+				fmt.Fprintln(out, "ERROR:", err)
 				continue
 			}
 			results = append(results, files...)
@@ -83,13 +84,13 @@ func getSHA256(path string) (string, error) {
 	return string(hashsum), nil
 }
 
-func getDoublesByHashsum(files map[int64][]fileInfo) map[string][]fileInfo {
+func getDoublesByHashsum(out io.Writer, files map[int64][]fileInfo) map[string][]fileInfo {
 	hashes := make(map[string][]fileInfo)
 	for _, fileList := range files {
 		for _, file := range fileList {
 			hash, err := getSHA256(file.path)
 			if err != nil {
-				fmt.Fprintln(os.Stderr, "ERROR", err)
+				fmt.Fprintln(out, "ERROR", err)
 			}
 			if _, exists := hashes[hash]; !exists {
 				hashes[hash] = make([]fileInfo, 0)
@@ -193,7 +194,7 @@ func convertFileSizeToHumanReadable(size int64) string {
 	return fmt.Sprintf("%d bytes", size)
 }
 
-func printDoubles(out io.Writer, doubles map[string][]fileInfo) {
+func printDoubles(out io.Writer, doubles map[string][]fileInfo, showSizes bool) {
 	if len(doubles) == 0 {
 		fmt.Fprintln(out, "no duplicates found")
 		return
@@ -207,8 +208,12 @@ func printDoubles(out io.Writer, doubles map[string][]fileInfo) {
 		}
 		group := results[i]
 		for _, file := range group {
-			readableSize := convertFileSizeToHumanReadable(file.size)
-			fmt.Fprintf(out, "%s\t%s\n", readableSize, file.path)
+			if showSizes {
+				readableSize := convertFileSizeToHumanReadable(file.size)
+				fmt.Fprintf(out, "%s\t%s\n", readableSize, file.path)
+			} else {
+				fmt.Fprintf(out, "%s\n", file.path)
+			}
 		}
 	}
 
@@ -216,14 +221,37 @@ func printDoubles(out io.Writer, doubles map[string][]fileInfo) {
 	fmt.Fprintf(out, "\nPotential wasted disk space: %s\n", convertFileSizeToHumanReadable(wastedSpace))
 }
 
-func main() {
-	path := os.Args[1]
-	files, err := getFiles(path)
+func run(out io.Writer, errOut io.Writer, path string, showSizes bool) {
+	files, err := getFiles(errOut, path)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(errOut, err)
 	}
 
 	sizeDoubles := getDoublesBySize(files)
-	doubles := getDoublesByHashsum(sizeDoubles)
-	printDoubles(os.Stdout, doubles)
+	doubles := getDoublesByHashsum(errOut, sizeDoubles)
+	printDoubles(out, doubles, showSizes)
+}
+
+func main() {
+	var (
+		showSizes      bool
+		suppressErrors bool
+	)
+	flag.BoolVar(&showSizes, "s", true, "show file sizes (shorthand)")
+	flag.BoolVar(&showSizes, "show-sizes", true, "show file sizes")
+	flag.BoolVar(&suppressErrors, "no-errors", false, "suppress error messages")
+	flag.Parse()
+	path := flag.Arg(0)
+	if path == "" {
+		path = "."
+	}
+
+	out := os.Stdout
+	var errOut io.Writer
+	if suppressErrors {
+		errOut = io.Discard
+	} else {
+		errOut = os.Stderr
+	}
+	run(out, errOut, path, showSizes)
 }
