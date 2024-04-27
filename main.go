@@ -194,7 +194,7 @@ func convertFileSizeToHumanReadable(size int64) string {
 	return fmt.Sprintf("%d bytes", size)
 }
 
-func printDoubles(out io.Writer, doubles map[string][]fileInfo, showSizes bool) {
+func printDoubles(out io.Writer, doubles map[string][]fileInfo, showSizes bool, calcWastedSpace bool) {
 	if len(doubles) == 0 {
 		fmt.Fprintln(out, "no duplicates found")
 		return
@@ -217,11 +217,13 @@ func printDoubles(out io.Writer, doubles map[string][]fileInfo, showSizes bool) 
 		}
 	}
 
-	wastedSpace := calculateWastedSpace(results)
-	fmt.Fprintf(out, "\nPotential wasted disk space: %s\n", convertFileSizeToHumanReadable(wastedSpace))
+	if calcWastedSpace {
+		wastedSpace := calculateWastedSpace(results)
+		fmt.Fprintf(out, "\nPotential wasted disk space: %s\n", convertFileSizeToHumanReadable(wastedSpace))
+	}
 }
 
-func run(out io.Writer, errOut io.Writer, path string, showSizes bool) {
+func run(out io.Writer, errOut io.Writer, path string, showSizes bool, calcWastedSpace bool) {
 	files, err := getFiles(errOut, path)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
@@ -229,17 +231,19 @@ func run(out io.Writer, errOut io.Writer, path string, showSizes bool) {
 
 	sizeDoubles := getDoublesBySize(files)
 	doubles := getDoublesByHashsum(errOut, sizeDoubles)
-	printDoubles(out, doubles, showSizes)
+	printDoubles(out, doubles, showSizes, calcWastedSpace)
 }
 
 func main() {
 	var (
-		showSizes      bool
-		suppressErrors bool
+		showSizes       bool
+		suppressErrors  bool
+		calcWastedSpace bool
 	)
 	flag.BoolVar(&showSizes, "s", true, "show file sizes (shorthand)")
 	flag.BoolVar(&showSizes, "show-sizes", true, "show file sizes")
 	flag.BoolVar(&suppressErrors, "no-errors", false, "suppress error messages")
+	flag.BoolVar(&calcWastedSpace, "calc", true, "calculate wasted space")
 	flag.Parse()
 	path := flag.Arg(0)
 	if path == "" {
@@ -253,5 +257,5 @@ func main() {
 	} else {
 		errOut = os.Stderr
 	}
-	run(out, errOut, path, showSizes)
+	run(out, errOut, path, showSizes, calcWastedSpace)
 }
