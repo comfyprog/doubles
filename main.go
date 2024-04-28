@@ -21,7 +21,7 @@ func isRegularFile(info fs.FileInfo) bool {
 	return info.Mode()&os.ModeType == 0
 }
 
-func getFiles(out io.Writer, path string) ([]fileInfo, error) {
+func getFiles(out io.Writer, path string, skipZeroes bool) ([]fileInfo, error) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return nil, err
@@ -34,7 +34,7 @@ func getFiles(out io.Writer, path string) ([]fileInfo, error) {
 			continue
 		}
 		if info.IsDir() {
-			files, err := getFiles(out, filepath.Join(path, info.Name()))
+			files, err := getFiles(out, filepath.Join(path, info.Name()), skipZeroes)
 			if err != nil {
 				fmt.Fprintln(out, "ERROR:", err)
 				continue
@@ -42,6 +42,9 @@ func getFiles(out io.Writer, path string) ([]fileInfo, error) {
 			results = append(results, files...)
 		} else {
 			if !isRegularFile(info) {
+				continue
+			}
+			if skipZeroes && info.Size() == 0 {
 				continue
 			}
 			info := fileInfo{path: filepath.Join(path, info.Name()), size: info.Size()}
@@ -289,8 +292,8 @@ func printDoubles(out io.Writer, doubles map[string][]fileInfo, showSizes bool, 
 	}
 }
 
-func run(out io.Writer, errOut io.Writer, path string, showSizes bool, calcWastedSpace bool, hashWorkers int) {
-	files, err := getFiles(errOut, path)
+func run(out io.Writer, errOut io.Writer, path string, showSizes bool, calcWastedSpace bool, skipZeroes bool, hashWorkers int) {
+	files, err := getFiles(errOut, path, skipZeroes)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
 	}
@@ -305,12 +308,14 @@ func main() {
 		showSizes       bool
 		suppressErrors  bool
 		calcWastedSpace bool
+		skipZeroes      bool
 		hashWorkers     int
 	)
 	flag.BoolVar(&showSizes, "s", true, "show file sizes (shorthand)")
 	flag.BoolVar(&showSizes, "show-sizes", true, "show file sizes")
 	flag.BoolVar(&suppressErrors, "no-errors", false, "suppress error messages")
 	flag.BoolVar(&calcWastedSpace, "calc", true, "calculate wasted space")
+	flag.BoolVar(&skipZeroes, "skip-zero", true, "skip zero-sized files")
 	flag.IntVar(&hashWorkers, "threads", 1, "numbers of threads to work in")
 	flag.IntVar(&hashWorkers, "t", 1, "numbers of threads to work in (shorthand)")
 	flag.Parse()
@@ -326,5 +331,5 @@ func main() {
 	} else {
 		errOut = os.Stderr
 	}
-	run(out, errOut, path, showSizes, calcWastedSpace, hashWorkers)
+	run(out, errOut, path, showSizes, calcWastedSpace, skipZeroes, hashWorkers)
 }
