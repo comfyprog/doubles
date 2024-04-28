@@ -1,9 +1,13 @@
 package main
 
 import (
+	"crypto/md5"
+	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/sha512"
 	"flag"
 	"fmt"
+	"hash"
 	"io"
 	"io/fs"
 	"os"
@@ -73,14 +77,24 @@ func getDoublesBySize(files []fileInfo) map[int64][]fileInfo {
 	return result
 }
 
-func getSHA256(path string) (string, error) {
+func getHash(path string, hashFunc string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", err
 	}
 	defer f.Close()
 
-	h := sha256.New()
+	var h hash.Hash
+	switch hashFunc {
+	case "sha1":
+		h = sha1.New()
+	case "sha256":
+		h = sha256.New()
+	case "sha512":
+		h = sha512.New()
+	default:
+		h = md5.New()
+	}
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}
@@ -88,35 +102,35 @@ func getSHA256(path string) (string, error) {
 	return string(hashsum), nil
 }
 
-// func getDoublesByHashsum(out io.Writer, files map[int64][]fileInfo) map[string][]fileInfo {
-// 	hashes := make(map[string][]fileInfo)
-// 	for _, fileList := range files {
-// 		for _, file := range fileList {
-// 			hash, err := getSHA256(file.path)
-// 			if err != nil {
-// 				fmt.Fprintln(out, "ERROR", err)
-// 			}
-// 			if _, exists := hashes[hash]; !exists {
-// 				hashes[hash] = make([]fileInfo, 0)
-// 			}
-// 			hashes[hash] = append(hashes[hash], file)
-// 		}
-// 	}
+func getDoublesByHashsum(out io.Writer, files map[int64][]fileInfo, hashFunc string) map[string][]fileInfo {
+	hashes := make(map[string][]fileInfo)
+	for _, fileList := range files {
+		for _, file := range fileList {
+			hash, err := getHash(file.path, hashFunc)
+			if err != nil {
+				fmt.Fprintln(out, "ERROR", err)
+			}
+			if _, exists := hashes[hash]; !exists {
+				hashes[hash] = make([]fileInfo, 0)
+			}
+			hashes[hash] = append(hashes[hash], file)
+		}
+	}
 
-// 	for hash := range hashes {
-// 		if len(hashes[hash]) == 1 {
-// 			delete(hashes, hash)
-// 		}
-// 	}
-// 	return hashes
-// }
+	for hash := range hashes {
+		if len(hashes[hash]) == 1 {
+			delete(hashes, hash)
+		}
+	}
+	return hashes
+}
 
 type fileHash struct {
 	info fileInfo
 	hash string
 }
 
-func getDoublesByHashsum(out io.Writer, files map[int64][]fileInfo, hashWorkers int) map[string][]fileInfo {
+func getDoublesByHashsumMultiTread(out io.Writer, files map[int64][]fileInfo, hashWorkers int, hashFunc string) map[string][]fileInfo {
 	fileChan := make(chan fileInfo)
 	fileHashChan := make(chan fileHash)
 
@@ -141,7 +155,7 @@ func getDoublesByHashsum(out io.Writer, files map[int64][]fileInfo, hashWorkers 
 	for i := 0; i < hashWorkers; i++ {
 		go func(num int) {
 			for file := range fileChan {
-				hash, err := getSHA256(file.path)
+				hash, err := getHash(file.path, hashFunc)
 				if err != nil {
 					fmt.Fprintln(out, "ERROR", err)
 					hash = ""
@@ -292,15 +306,28 @@ func printDoubles(out io.Writer, doubles map[string][]fileInfo, showSizes bool, 
 	}
 }
 
-func run(out io.Writer, errOut io.Writer, path string, showSizes bool, calcWastedSpace bool, skipZeroes bool, hashWorkers int) {
-	files, err := getFiles(errOut, path, skipZeroes)
+type options struct {
+	showSizes       bool
+	calcWastedSpace bool
+	skipZeroes      bool
+	hashWorkers     int
+	hashFunc        string
+}
+
+func run(out io.Writer, errOut io.Writer, path string, o options) {
+	files, err := getFiles(errOut, path, o.skipZeroes)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
 	}
 
 	sizeDoubles := getDoublesBySize(files)
-	doubles := getDoublesByHashsum(errOut, sizeDoubles, hashWorkers)
-	printDoubles(out, doubles, showSizes, calcWastedSpace)
+	var doubles map[string][]fileInfo
+	if o.hashWorkers > 1 {
+		doubles = getDoublesByHashsumMultiTread(errOut, sizeDoubles, o.hashWorkers, o.hashFunc)
+	} else {
+		doubles = getDoublesByHashsum(errOut, sizeDoubles, o.hashFunc)
+	}
+	printDoubles(out, doubles, o.showSizes, o.calcWastedSpace)
 }
 
 func main() {
@@ -310,6 +337,7 @@ func main() {
 		calcWastedSpace bool
 		skipZeroes      bool
 		hashWorkers     int
+		hashFunc        string
 	)
 	flag.BoolVar(&showSizes, "s", true, "show file sizes (shorthand)")
 	flag.BoolVar(&showSizes, "show-sizes", true, "show file sizes")
@@ -318,6 +346,7 @@ func main() {
 	flag.BoolVar(&skipZeroes, "skip-zero", true, "skip zero-sized files")
 	flag.IntVar(&hashWorkers, "threads", 1, "numbers of threads to work in")
 	flag.IntVar(&hashWorkers, "t", 1, "numbers of threads to work in (shorthand)")
+	flag.StringVar(&hashFunc, "hash-func", "md5", "hash function (md5|sha1|sha256|sha512)")
 	flag.Parse()
 	path := flag.Arg(0)
 	if path == "" {
@@ -331,5 +360,10 @@ func main() {
 	} else {
 		errOut = os.Stderr
 	}
-	run(out, errOut, path, showSizes, calcWastedSpace, skipZeroes, hashWorkers)
+	run(out, errOut, path, options{
+		showSizes:       showSizes,
+		calcWastedSpace: calcWastedSpace,
+		skipZeroes:      skipZeroes,
+		hashWorkers:     hashWorkers,
+		hashFunc:        hashFunc})
 }
