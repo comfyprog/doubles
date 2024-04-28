@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 )
 
 type fileInfo struct {
@@ -84,20 +85,85 @@ func getSHA256(path string) (string, error) {
 	return string(hashsum), nil
 }
 
-func getDoublesByHashsum(out io.Writer, files map[int64][]fileInfo) map[string][]fileInfo {
-	hashes := make(map[string][]fileInfo)
+// func getDoublesByHashsum(out io.Writer, files map[int64][]fileInfo) map[string][]fileInfo {
+// 	hashes := make(map[string][]fileInfo)
+// 	for _, fileList := range files {
+// 		for _, file := range fileList {
+// 			hash, err := getSHA256(file.path)
+// 			if err != nil {
+// 				fmt.Fprintln(out, "ERROR", err)
+// 			}
+// 			if _, exists := hashes[hash]; !exists {
+// 				hashes[hash] = make([]fileInfo, 0)
+// 			}
+// 			hashes[hash] = append(hashes[hash], file)
+// 		}
+// 	}
+
+// 	for hash := range hashes {
+// 		if len(hashes[hash]) == 1 {
+// 			delete(hashes, hash)
+// 		}
+// 	}
+// 	return hashes
+// }
+
+type fileHash struct {
+	info fileInfo
+	hash string
+}
+
+func getDoublesByHashsum(out io.Writer, files map[int64][]fileInfo, hashWorkers int) map[string][]fileInfo {
+	fileChan := make(chan fileInfo)
+	fileHashChan := make(chan fileHash)
+
+	wg := sync.WaitGroup{}
+	wg.Add(hashWorkers + 1)
+
+	totalSent := 0
 	for _, fileList := range files {
-		for _, file := range fileList {
-			hash, err := getSHA256(file.path)
-			if err != nil {
-				fmt.Fprintln(out, "ERROR", err)
+		totalSent += len(fileList)
+	}
+
+	go func() {
+		for _, fileList := range files {
+			for _, file := range fileList {
+				fileChan <- file
 			}
-			if _, exists := hashes[hash]; !exists {
-				hashes[hash] = make([]fileInfo, 0)
+		}
+		close(fileChan)
+		wg.Done()
+	}()
+
+	for i := 0; i < hashWorkers; i++ {
+		go func(num int) {
+			for file := range fileChan {
+				hash, err := getSHA256(file.path)
+				if err != nil {
+					fmt.Fprintln(out, "ERROR", err)
+					hash = ""
+				}
+				fileHashChan <- fileHash{info: file, hash: hash}
 			}
-			hashes[hash] = append(hashes[hash], file)
+			wg.Done()
+		}(i)
+	}
+
+	hashes := make(map[string][]fileInfo)
+	totalReceived := 0
+	for fileHashInfo := range fileHashChan {
+		totalReceived++
+		hash := fileHashInfo.hash
+		if _, exists := hashes[hash]; !exists {
+			hashes[hash] = make([]fileInfo, 0)
+		}
+		hashes[hash] = append(hashes[hash], fileHashInfo.info)
+		if totalReceived == totalSent {
+			break
 		}
 	}
+
+	wg.Wait()
 
 	for hash := range hashes {
 		if len(hashes[hash]) == 1 {
@@ -223,14 +289,14 @@ func printDoubles(out io.Writer, doubles map[string][]fileInfo, showSizes bool, 
 	}
 }
 
-func run(out io.Writer, errOut io.Writer, path string, showSizes bool, calcWastedSpace bool) {
+func run(out io.Writer, errOut io.Writer, path string, showSizes bool, calcWastedSpace bool, hashWorkers int) {
 	files, err := getFiles(errOut, path)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
 	}
 
 	sizeDoubles := getDoublesBySize(files)
-	doubles := getDoublesByHashsum(errOut, sizeDoubles)
+	doubles := getDoublesByHashsum(errOut, sizeDoubles, hashWorkers)
 	printDoubles(out, doubles, showSizes, calcWastedSpace)
 }
 
@@ -239,11 +305,14 @@ func main() {
 		showSizes       bool
 		suppressErrors  bool
 		calcWastedSpace bool
+		hashWorkers     int
 	)
 	flag.BoolVar(&showSizes, "s", true, "show file sizes (shorthand)")
 	flag.BoolVar(&showSizes, "show-sizes", true, "show file sizes")
 	flag.BoolVar(&suppressErrors, "no-errors", false, "suppress error messages")
 	flag.BoolVar(&calcWastedSpace, "calc", true, "calculate wasted space")
+	flag.IntVar(&hashWorkers, "threads", 1, "numbers of threads to work in")
+	flag.IntVar(&hashWorkers, "t", 1, "numbers of threads to work in (shorthand)")
 	flag.Parse()
 	path := flag.Arg(0)
 	if path == "" {
@@ -257,5 +326,5 @@ func main() {
 	} else {
 		errOut = os.Stderr
 	}
-	run(out, errOut, path, showSizes, calcWastedSpace)
+	run(out, errOut, path, showSizes, calcWastedSpace, hashWorkers)
 }
