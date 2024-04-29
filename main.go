@@ -25,7 +25,7 @@ func isRegularFile(info fs.FileInfo) bool {
 	return info.Mode()&os.ModeType == 0
 }
 
-func getFiles(out io.Writer, path string, skipZeroes bool) ([]fileInfo, error) {
+func getFiles(out io.Writer, path string, skipZeroes bool, pattern string) ([]fileInfo, error) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return nil, err
@@ -38,7 +38,7 @@ func getFiles(out io.Writer, path string, skipZeroes bool) ([]fileInfo, error) {
 			continue
 		}
 		if info.IsDir() {
-			files, err := getFiles(out, filepath.Join(path, info.Name()), skipZeroes)
+			files, err := getFiles(out, filepath.Join(path, info.Name()), skipZeroes, pattern)
 			if err != nil {
 				fmt.Fprintln(out, "ERROR:", err)
 				continue
@@ -51,7 +51,18 @@ func getFiles(out io.Writer, path string, skipZeroes bool) ([]fileInfo, error) {
 			if skipZeroes && info.Size() == 0 {
 				continue
 			}
-			info := fileInfo{path: filepath.Join(path, info.Name()), size: info.Size()}
+
+			path := filepath.Join(path, info.Name())
+			if pattern != "" {
+				matched, err := filepath.Match(pattern, info.Name())
+				if err != nil {
+					return results, err
+				}
+				if !matched {
+					continue
+				}
+			}
+			info := fileInfo{path: path, size: info.Size()}
 
 			results = append(results, info)
 		}
@@ -312,10 +323,11 @@ type options struct {
 	skipZeroes      bool
 	hashWorkers     int
 	hashFunc        string
+	pattern         string
 }
 
 func run(out io.Writer, errOut io.Writer, path string, o options) {
-	files, err := getFiles(errOut, path, o.skipZeroes)
+	files, err := getFiles(errOut, path, o.skipZeroes, o.pattern)
 	if err != nil {
 		fmt.Fprintln(errOut, err)
 	}
@@ -338,6 +350,7 @@ func main() {
 		skipZeroes      bool
 		hashWorkers     int
 		hashFunc        string
+		pattern         string
 	)
 	flag.BoolVar(&showSizes, "s", true, "show file sizes (shorthand)")
 	flag.BoolVar(&showSizes, "show-sizes", true, "show file sizes")
@@ -347,6 +360,8 @@ func main() {
 	flag.IntVar(&hashWorkers, "threads", 1, "numbers of threads to work in")
 	flag.IntVar(&hashWorkers, "t", 1, "numbers of threads to work in (shorthand)")
 	flag.StringVar(&hashFunc, "hash-func", "md5", "hash function (md5|sha1|sha256|sha512)")
+	flag.StringVar(&pattern, "pattern", "", "pattern for file names (https://pkg.go.dev/path/filepath#Match)")
+	flag.StringVar(&pattern, "p", "", "pattern for file names (https://pkg.go.dev/path/filepath#Match) (shorthand)")
 	flag.Parse()
 	path := flag.Arg(0)
 	if path == "" {
@@ -365,5 +380,7 @@ func main() {
 		calcWastedSpace: calcWastedSpace,
 		skipZeroes:      skipZeroes,
 		hashWorkers:     hashWorkers,
-		hashFunc:        hashFunc})
+		hashFunc:        hashFunc,
+		pattern:         pattern,
+	})
 }
