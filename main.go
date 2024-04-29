@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 type fileInfo struct {
@@ -24,7 +25,7 @@ func isRegularFile(info fs.FileInfo) bool {
 	return info.Mode()&os.ModeType == 0
 }
 
-func getFiles(out io.Writer, path string, skipZeroes bool, pattern string) ([]fileInfo, error) {
+func getFiles(out io.Writer, path string, skipZeroes bool, patterns []string) ([]fileInfo, error) {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return nil, err
@@ -37,7 +38,7 @@ func getFiles(out io.Writer, path string, skipZeroes bool, pattern string) ([]fi
 			continue
 		}
 		if info.IsDir() {
-			files, err := getFiles(out, filepath.Join(path, info.Name()), skipZeroes, pattern)
+			files, err := getFiles(out, filepath.Join(path, info.Name()), skipZeroes, patterns)
 			if err != nil {
 				fmt.Fprintln(out, "ERROR:", err)
 				continue
@@ -52,12 +53,20 @@ func getFiles(out io.Writer, path string, skipZeroes bool, pattern string) ([]fi
 			}
 
 			path := filepath.Join(path, info.Name())
-			if pattern != "" {
-				matched, err := filepath.Match(pattern, info.Name())
-				if err != nil {
-					return results, err
+			if len(patterns) != 0 {
+				hasMatches := false
+				for i := range patterns {
+					matched, err := filepath.Match(patterns[i], info.Name())
+					if err != nil {
+						return results, err
+					}
+					if !matched {
+						hasMatches = true
+						break
+					}
+
 				}
-				if !matched {
+				if !hasMatches {
 					continue
 				}
 			}
@@ -282,14 +291,14 @@ type options struct {
 	skipZeroes      bool
 	hashWorkers     int
 	hashFunc        string
-	pattern         string
+	patterns        []string
 }
 
 func run(out io.Writer, errOut io.Writer, paths []string, o options) {
 	files := make([]fileInfo, 0)
 	fileSet := make(map[string]struct{})
 	for _, path := range paths {
-		pathFiles, err := getFiles(errOut, path, o.skipZeroes, o.pattern)
+		pathFiles, err := getFiles(errOut, path, o.skipZeroes, o.patterns)
 		if err != nil {
 			fmt.Fprintln(errOut, err)
 		}
@@ -316,6 +325,17 @@ func run(out io.Writer, errOut io.Writer, paths []string, o options) {
 	printDoubles(out, doubles, o.showSizes, o.calcWastedSpace)
 }
 
+type patterns []string
+
+func (p *patterns) String() string {
+	return strings.Join(*p, " ")
+}
+
+func (p *patterns) Set(s string) error {
+	*p = append(*p, s)
+	return nil
+}
+
 func main() {
 	var (
 		showSizes       bool
@@ -324,8 +344,9 @@ func main() {
 		skipZeroes      bool
 		hashWorkers     int
 		hashFunc        string
-		pattern         string
+		patternList     patterns
 	)
+
 	flag.BoolVar(&showSizes, "s", true, "show file sizes (shorthand)")
 	flag.BoolVar(&showSizes, "show-sizes", true, "show file sizes")
 	flag.BoolVar(&suppressErrors, "no-errors", false, "suppress error messages")
@@ -334,9 +355,11 @@ func main() {
 	flag.IntVar(&hashWorkers, "threads", 1, "numbers of threads to work in")
 	flag.IntVar(&hashWorkers, "t", 1, "numbers of threads to work in (shorthand)")
 	flag.StringVar(&hashFunc, "hash-func", "md5", "hash function (md5|sha1|sha256|sha512)")
-	flag.StringVar(&pattern, "pattern", "", "pattern for file names (https://pkg.go.dev/path/filepath#Match)")
-	flag.StringVar(&pattern, "p", "", "pattern for file names (https://pkg.go.dev/path/filepath#Match) (shorthand)")
+	flag.Var(&patternList, "pattern", "pattern for file names (https://pkg.go.dev/path/filepath#Match)")
+	flag.Var(&patternList, "p", "pattern for file names (https://pkg.go.dev/path/filepath#Match) (shorthand)")
+
 	flag.Parse()
+
 	paths := flag.Args()
 	if len(paths) == 0 {
 		paths = []string{"."}
@@ -355,6 +378,6 @@ func main() {
 		skipZeroes:      skipZeroes,
 		hashWorkers:     hashWorkers,
 		hashFunc:        hashFunc,
-		pattern:         pattern,
+		patterns:        patternList,
 	})
 }
