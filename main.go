@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 )
 
 type fileInfo struct {
@@ -161,94 +160,6 @@ func getDoubles(out io.Writer, candidates []fileInfo, hashFunc string) [][]fileI
 	return result
 }
 
-// func getDoublesByHashsum(out io.Writer, files map[int64][]fileInfo, hashFunc string) map[string][]fileInfo {
-// 	hashes := make(map[string][]fileInfo)
-// 	for _, fileList := range files {
-// 		for _, file := range fileList {
-// 			hash, err := getHash(file.path, hashFunc)
-// 			if err != nil {
-// 				fmt.Fprintln(out, "ERROR", err)
-// 			}
-// 			if _, exists := hashes[hash]; !exists {
-// 				hashes[hash] = make([]fileInfo, 0)
-// 			}
-// 			hashes[hash] = append(hashes[hash], file)
-// 		}
-// 	}
-
-// 	for hash := range hashes {
-// 		if len(hashes[hash]) == 1 {
-// 			delete(hashes, hash)
-// 		}
-// 	}
-// 	return hashes
-// }
-
-type fileHash struct {
-	info fileInfo
-	hash string
-}
-
-func getDoublesByHashsumMultiTread(out io.Writer, files map[int64][]fileInfo, hashWorkers int, hashFunc string) map[string][]fileInfo {
-	fileChan := make(chan fileInfo)
-	fileHashChan := make(chan fileHash)
-
-	wg := sync.WaitGroup{}
-	wg.Add(hashWorkers + 1)
-
-	totalSent := 0
-	for _, fileList := range files {
-		totalSent += len(fileList)
-	}
-
-	go func() {
-		for _, fileList := range files {
-			for _, file := range fileList {
-				fileChan <- file
-			}
-		}
-		close(fileChan)
-		wg.Done()
-	}()
-
-	for i := 0; i < hashWorkers; i++ {
-		go func(num int) {
-			for file := range fileChan {
-				hash, err := getHash(file, hashFunc, -1)
-				if err != nil {
-					fmt.Fprintln(out, "ERROR", err)
-					hash = ""
-				}
-				fileHashChan <- fileHash{info: file, hash: hash}
-			}
-			wg.Done()
-		}(i)
-	}
-
-	hashes := make(map[string][]fileInfo)
-	totalReceived := 0
-	for fileHashInfo := range fileHashChan {
-		totalReceived++
-		hash := fileHashInfo.hash
-		if _, exists := hashes[hash]; !exists {
-			hashes[hash] = make([]fileInfo, 0)
-		}
-		hashes[hash] = append(hashes[hash], fileHashInfo.info)
-		if totalReceived == totalSent {
-			break
-		}
-	}
-
-	wg.Wait()
-
-	for hash := range hashes {
-		if len(hashes[hash]) == 1 {
-			delete(hashes, hash)
-		}
-	}
-	return hashes
-}
-
 func groupSize(g []fileInfo) int64 {
 	var sum int64 = 0
 	for i := range g {
@@ -392,13 +303,6 @@ func run(out io.Writer, errOut io.Writer, paths []string, o options) {
 	}
 
 	sizeDoubles := getDoublesBySize(files)
-	// var doubles map[string][]fileInfo
-	// if o.hashWorkers > 1 {
-	// 	doubles = getDoublesByHashsumMultiTread(errOut, sizeDoubles, o.hashWorkers, o.hashFunc)
-	// } else {
-	// 	doubles = getDoublesByHashsum(errOut, sizeDoubles, o.hashFunc)
-	// }
-
 	doubles := make([][]fileInfo, 0)
 	for size := range sizeDoubles {
 		doublesCandidates := sizeDoubles[size]
