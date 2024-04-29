@@ -326,10 +326,21 @@ type options struct {
 	pattern         string
 }
 
-func run(out io.Writer, errOut io.Writer, path string, o options) {
-	files, err := getFiles(errOut, path, o.skipZeroes, o.pattern)
-	if err != nil {
-		fmt.Fprintln(errOut, err)
+func run(out io.Writer, errOut io.Writer, paths []string, o options) {
+	files := make([]fileInfo, 0)
+	fileSet := make(map[string]struct{})
+	for _, path := range paths {
+		pathFiles, err := getFiles(errOut, path, o.skipZeroes, o.pattern)
+		if err != nil {
+			fmt.Fprintln(errOut, err)
+		}
+
+		for i := range pathFiles {
+			filePath := pathFiles[i].path
+			if _, exists := fileSet[filePath]; !exists {
+				files = append(files, pathFiles[i])
+			}
+		}
 	}
 
 	sizeDoubles := getDoublesBySize(files)
@@ -363,9 +374,9 @@ func main() {
 	flag.StringVar(&pattern, "pattern", "", "pattern for file names (https://pkg.go.dev/path/filepath#Match)")
 	flag.StringVar(&pattern, "p", "", "pattern for file names (https://pkg.go.dev/path/filepath#Match) (shorthand)")
 	flag.Parse()
-	path := flag.Arg(0)
-	if path == "" {
-		path = "."
+	paths := flag.Args()
+	if len(paths) == 0 {
+		paths = []string{"."}
 	}
 
 	out := os.Stdout
@@ -375,7 +386,7 @@ func main() {
 	} else {
 		errOut = os.Stderr
 	}
-	run(out, errOut, path, options{
+	run(out, errOut, paths, options{
 		showSizes:       showSizes,
 		calcWastedSpace: calcWastedSpace,
 		skipZeroes:      skipZeroes,
