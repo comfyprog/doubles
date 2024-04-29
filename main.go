@@ -289,7 +289,6 @@ type options struct {
 	showSizes       bool
 	calcWastedSpace bool
 	skipZeroes      bool
-	hashWorkers     int
 	hashFunc        string
 	patterns        []string
 }
@@ -342,7 +341,6 @@ func main() {
 		suppressErrors  bool
 		calcWastedSpace bool
 		skipZeroes      bool
-		hashWorkers     int
 		hashFunc        string
 		patternList     patterns
 	)
@@ -352,11 +350,17 @@ func main() {
 	flag.BoolVar(&suppressErrors, "no-errors", false, "suppress error messages")
 	flag.BoolVar(&calcWastedSpace, "calc", true, "calculate wasted space")
 	flag.BoolVar(&skipZeroes, "skip-zero", true, "skip zero-sized files")
-	flag.IntVar(&hashWorkers, "threads", 1, "numbers of threads to work in")
-	flag.IntVar(&hashWorkers, "t", 1, "numbers of threads to work in (shorthand)")
 	flag.StringVar(&hashFunc, "hash-func", "md5", "hash function (md5|sha1|sha256|sha512)")
 	flag.Var(&patternList, "pattern", "pattern for file names (https://pkg.go.dev/path/filepath#Match)")
 	flag.Var(&patternList, "p", "pattern for file names (https://pkg.go.dev/path/filepath#Match) (shorthand)")
+
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "doubles: find duplicate files on given paths\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage of doubles:\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "doubles [OPTIONS] PATH_1 PATH_2 ... PATH_N\n")
+		fmt.Fprintf(flag.CommandLine.Output(), "Options:\n")
+		flag.PrintDefaults()
+	}
 
 	flag.Parse()
 
@@ -376,7 +380,6 @@ func main() {
 		showSizes:       showSizes,
 		calcWastedSpace: calcWastedSpace,
 		skipZeroes:      skipZeroes,
-		hashWorkers:     hashWorkers,
 		hashFunc:        hashFunc,
 		patterns:        patternList,
 	})
