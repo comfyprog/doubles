@@ -88,8 +88,8 @@ func getDoublesBySize(files []fileInfo) map[int64][]fileInfo {
 	return result
 }
 
-func getHash(path string, hashFunc string) (string, error) {
-	f, err := os.Open(path)
+func getHash(file fileInfo, hashFunc string, copySize int64) (string, error) {
+	f, err := os.Open(file.path)
 	if err != nil {
 		return "", err
 	}
@@ -106,35 +106,83 @@ func getHash(path string, hashFunc string) (string, error) {
 	default:
 		h = md5.New()
 	}
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
+	if copySize == -1 {
+		if _, err := io.Copy(h, f); err != nil {
+			return "", err
+		}
+	} else {
+		copySize = min(copySize, file.size)
+		if _, err := io.CopyN(h, f, copySize); err != nil {
+			return "", err
+		}
 	}
 	hashsum := h.Sum(nil)
 	return string(hashsum), nil
 }
 
-func getDoublesByHashsum(out io.Writer, files map[int64][]fileInfo, hashFunc string) map[string][]fileInfo {
+const hashProbeSize = 4096
+
+func getDoublesByHashsum(out io.Writer, candidates []fileInfo, hashFunc string, numBytes int64) [][]fileInfo {
 	hashes := make(map[string][]fileInfo)
-	for _, fileList := range files {
-		for _, file := range fileList {
-			hash, err := getHash(file.path, hashFunc)
-			if err != nil {
-				fmt.Fprintln(out, "ERROR", err)
-			}
-			if _, exists := hashes[hash]; !exists {
-				hashes[hash] = make([]fileInfo, 0)
-			}
-			hashes[hash] = append(hashes[hash], file)
+	for _, file := range candidates {
+		hash, err := getHash(file, hashFunc, numBytes)
+		if err != nil {
+			fmt.Fprintln(out, "ERROR", err)
 		}
+		if _, exists := hashes[hash]; !exists {
+			hashes[hash] = make([]fileInfo, 0)
+		}
+		hashes[hash] = append(hashes[hash], file)
 	}
 
+	doublesGroups := make([][]fileInfo, 0)
 	for hash := range hashes {
 		if len(hashes[hash]) == 1 {
-			delete(hashes, hash)
+			continue
+		}
+		doublesGroups = append(doublesGroups, hashes[hash])
+	}
+	return doublesGroups
+}
+
+func getDoubles(out io.Writer, candidates []fileInfo, hashFunc string) [][]fileInfo {
+	potentialDoubles := getDoublesByHashsum(out, candidates, hashFunc, hashProbeSize)
+	if len(potentialDoubles) == 0 {
+		return potentialDoubles
+	}
+	result := make([][]fileInfo, 0)
+	for i := range potentialDoubles {
+		group := potentialDoubles[i]
+		doubles := getDoublesByHashsum(out, group, hashFunc, -1)
+		if len(doubles) > 0 {
+			result = append(result, doubles...)
 		}
 	}
-	return hashes
+	return result
 }
+
+// func getDoublesByHashsum(out io.Writer, files map[int64][]fileInfo, hashFunc string) map[string][]fileInfo {
+// 	hashes := make(map[string][]fileInfo)
+// 	for _, fileList := range files {
+// 		for _, file := range fileList {
+// 			hash, err := getHash(file.path, hashFunc)
+// 			if err != nil {
+// 				fmt.Fprintln(out, "ERROR", err)
+// 			}
+// 			if _, exists := hashes[hash]; !exists {
+// 				hashes[hash] = make([]fileInfo, 0)
+// 			}
+// 			hashes[hash] = append(hashes[hash], file)
+// 		}
+// 	}
+
+// 	for hash := range hashes {
+// 		if len(hashes[hash]) == 1 {
+// 			delete(hashes, hash)
+// 		}
+// 	}
+// 	return hashes
+// }
 
 type fileHash struct {
 	info fileInfo
@@ -166,7 +214,7 @@ func getDoublesByHashsumMultiTread(out io.Writer, files map[int64][]fileInfo, ha
 	for i := 0; i < hashWorkers; i++ {
 		go func(num int) {
 			for file := range fileChan {
-				hash, err := getHash(file.path, hashFunc)
+				hash, err := getHash(file, hashFunc, -1)
 				if err != nil {
 					fmt.Fprintln(out, "ERROR", err)
 					hash = ""
@@ -209,7 +257,7 @@ func groupSize(g []fileInfo) int64 {
 	return sum
 }
 
-func sortResults(doubles map[string][]fileInfo) [][]fileInfo {
+func sortResults(doubles [][]fileInfo) [][]fileInfo {
 	results := make([][]fileInfo, 0, len(doubles))
 	for k := range doubles {
 		group := doubles[k]
@@ -288,7 +336,7 @@ func convertFileSizeToHumanReadable(size int64) string {
 	return fmt.Sprintf("%d bytes", size)
 }
 
-func printDoubles(out io.Writer, doubles map[string][]fileInfo, showSizes bool, calcWastedSpace bool) {
+func printDoubles(out io.Writer, doubles [][]fileInfo, showSizes bool, calcWastedSpace bool) {
 	if len(doubles) == 0 {
 		fmt.Fprintln(out, "no duplicates found")
 		return
@@ -344,12 +392,23 @@ func run(out io.Writer, errOut io.Writer, paths []string, o options) {
 	}
 
 	sizeDoubles := getDoublesBySize(files)
-	var doubles map[string][]fileInfo
-	if o.hashWorkers > 1 {
-		doubles = getDoublesByHashsumMultiTread(errOut, sizeDoubles, o.hashWorkers, o.hashFunc)
-	} else {
-		doubles = getDoublesByHashsum(errOut, sizeDoubles, o.hashFunc)
+	// var doubles map[string][]fileInfo
+	// if o.hashWorkers > 1 {
+	// 	doubles = getDoublesByHashsumMultiTread(errOut, sizeDoubles, o.hashWorkers, o.hashFunc)
+	// } else {
+	// 	doubles = getDoublesByHashsum(errOut, sizeDoubles, o.hashFunc)
+	// }
+
+	doubles := make([][]fileInfo, 0)
+	for size := range sizeDoubles {
+		doublesCandidates := sizeDoubles[size]
+		foundDoubles := getDoubles(errOut, doublesCandidates, o.hashFunc)
+		if len(foundDoubles) > 0 {
+			doubles = append(doubles, foundDoubles...)
+		}
+
 	}
+
 	printDoubles(out, doubles, o.showSizes, o.calcWastedSpace)
 }
 
