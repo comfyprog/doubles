@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/md5"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -14,6 +15,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 type fileInfo struct {
@@ -115,7 +118,14 @@ func getHash(file fileInfo, hashFunc string, copySize int64) (string, error) {
 		h = md5.New()
 	}
 	if copySize == -1 {
-		if _, err := io.Copy(h, f); err != nil {
+		m, err := unix.Mmap(int(f.Fd()), 0, int(file.size), unix.PROT_READ, unix.MAP_PRIVATE)
+		if err != nil {
+			return "", err
+		}
+		defer unix.Munmap(m)
+		r := bytes.NewReader(m)
+
+		if _, err := io.Copy(h, r); err != nil {
 			return "", err
 		}
 	} else {
@@ -155,7 +165,8 @@ func getDoublesByHashsum(out io.Writer, candidates []fileInfo, hashFunc string, 
 
 func getDoubles(out io.Writer, candidates []fileInfo, hashFunc string) [][]fileInfo {
 	potentialDoubles := getDoublesByHashsum(out, candidates, hashFunc, hashProbeSize)
-	if len(potentialDoubles) == 0 {
+	fileSize := candidates[0].size
+	if len(potentialDoubles) == 0 || fileSize <= hashProbeSize {
 		return potentialDoubles
 	}
 	result := make([][]fileInfo, 0)
